@@ -1,23 +1,23 @@
 import pandas as pd
+import os
 from fastapi import FastAPI, HTTPException
 
-# Load cleaned dataset
-df = pd.read_csv(r"C:\Users\2mish\Downloads\new_final_data.csv")
 
-# Convert date columns to datetime
+#Load dataset safely (works locally + Render)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(BASE_DIR, "new_cleaned_properties.csv")
+
+df = pd.read_csv(DATA_PATH)
+
+# Ensure date columns are datetime
 df["added_date"] = pd.to_datetime(df["added_date"], errors="coerce")
 df["updated_date"] = pd.to_datetime(df["updated_date"], errors="coerce")
 
-# Re-create month_added from added_date
-df["month_added"] = df["added_date"].dt.to_period("M").astype(str)
-
-# Save back to CSV
-df.to_csv("new_cleaned_properties.csv", index=False)
-
-print("✅ Date columns fixed and dataset re-saved")
+#Ensure month_added exists
+if "month_added" not in df.columns:
+    df["month_added"] = df["added_date"].dt.to_period("M").astype(str)
 
 app = FastAPI()
-
 
 MIN_SAMPLE_SIZE = 10
 
@@ -25,7 +25,7 @@ VALID_PROPERTY_CATEGORIES = sorted(
     df["property_type"].dropna().unique().tolist()
 )
 
-# Root
+#Root
 @app.get("/")
 def home():
     return {
@@ -33,7 +33,7 @@ def home():
         "rows_loaded": len(df)
     }
 
-# Average Price
+#Average Price
 @app.get("/api/average_price")
 def average_price(
     state: str | None = None,
@@ -51,9 +51,7 @@ def average_price(
                 detail=f"Invalid property_type. Allowed values: {VALID_PROPERTY_CATEGORIES}"
             )
 
-        data = data[
-            data["property_type"].str.lower() == property_type.lower()
-        ]
+        data = data[data["property_type"].str.lower() == property_type.lower()]
 
     if data.empty or len(data) < MIN_SAMPLE_SIZE:
         raise HTTPException(
@@ -68,7 +66,8 @@ def average_price(
         "count": len(data)
     }
 
-# Trends
+#Trends
+
 @app.get("/api/trends")
 def price_trends(
     state: str | None = None,
@@ -92,9 +91,7 @@ def price_trends(
                 detail=f"Invalid property_type. Allowed values: {VALID_PROPERTY_CATEGORIES}"
             )
 
-        data = data[
-            data["property_type"].str.lower() == property_type.lower()
-        ]
+        data = data[data["property_type"].str.lower() == property_type.lower()]
 
     if data.empty:
         raise HTTPException(
