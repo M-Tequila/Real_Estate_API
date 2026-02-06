@@ -2,22 +2,55 @@ import pandas as pd
 import os
 from fastapi import FastAPI, HTTPException
 
-
-#Load dataset safely (works locally + Render)
+# Get directory where app.py lives
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(BASE_DIR, "new_cleaned_properties.csv")
+DATA_PATH = os.path.join(BASE_DIR, "final_data.csv")
 
+# Load CSV
 df = pd.read_csv(DATA_PATH)
 
-# Ensure date columns are datetime
-df["added_date"] = pd.to_datetime(df["added_date"], errors="coerce")
-df["updated_date"] = pd.to_datetime(df["updated_date"], errors="coerce")
 
-#Ensure month_added exists
-if "month_added" not in df.columns:
-    df["month_added"] = df["added_date"].dt.to_period("M").astype(str)
+# -------------------------
+# Fix price column
+# -------------------------
+df["price"] = (
+    df["price"]
+    .astype(str)
+    .str.replace(",", "", regex=False)
+    .str.replace("₦", "", regex=False)
+)
 
-app = FastAPI()
+df["price"] = pd.to_numeric(df["price"], errors="coerce")
+
+# -------------------------
+# Fix date columns (day-first format)
+# -------------------------
+df["added_date"] = pd.to_datetime(
+    df["added_date"],
+    errors="coerce",
+    dayfirst=True
+)
+
+df["updated_date"] = pd.to_datetime(
+    df["updated_date"],
+    errors="coerce",
+    dayfirst=True
+)
+
+# -------------------------
+# Create month_added as datetime (monthly)
+# -------------------------
+df["month_added"] = (
+    df["added_date"]
+    .dt.to_period("M")
+    .dt.to_timestamp()
+)
+
+print(df.dtypes)
+# -------------------------
+# FastAPI app
+# -------------------------
+app = FastAPI(title="Real Estate API")
 
 MIN_SAMPLE_SIZE = 10
 
@@ -25,15 +58,19 @@ VALID_PROPERTY_CATEGORIES = sorted(
     df["property_type"].dropna().unique().tolist()
 )
 
-#Root
+# -------------------------
+# Root
+# -------------------------
 @app.get("/")
 def home():
     return {
-        "message": "Real Estate API",
-        "rows_loaded": len(df)
+        "message": "Real Estate API is running 🚀",
+        "rows_loaded": int(len(df))
     }
 
-#Average Price
+# -------------------------
+# Average Price
+# -------------------------
 @app.get("/api/average_price")
 def average_price(
     state: str | None = None,
@@ -53,7 +90,7 @@ def average_price(
 
         data = data[data["property_type"].str.lower() == property_type.lower()]
 
-    if data.empty or len(data) < MIN_SAMPLE_SIZE:
+    if len(data) < MIN_SAMPLE_SIZE:
         raise HTTPException(
             status_code=404,
             detail="Not enough data to compute a reliable average price."
@@ -62,12 +99,13 @@ def average_price(
     return {
         "state": state,
         "property_type": property_type,
-        "average_price": round(data["price"].mean(), 2),
-        "count": len(data)
+        "average_price": round(float(data["price"].mean()), 2),
+        "count": int(len(data))
     }
 
-#Trends
-
+# -------------------------
+# Trends
+# -------------------------
 @app.get("/api/trends")
 def price_trends(
     state: str | None = None,
@@ -76,7 +114,7 @@ def price_trends(
     if not state and not property_type:
         raise HTTPException(
             status_code=400,
-            detail="Please provide at least a state or property_type to view trends."
+            detail="Please provide at least a state or property_type."
         )
 
     data = df.copy()
@@ -114,13 +152,13 @@ def price_trends(
     if trends.empty:
         raise HTTPException(
             status_code=404,
-            detail="Not enough data to compute reliable trends for this selection."
+            detail="Not enough data to compute reliable trends."
         )
 
     return [
         {
-            "month": row["month_added"],
-            "average_price": round(row["average_price"], 2),
+            "month": row["month_added"].strftime("%Y-%m"),
+            "average_price": round(float(row["average_price"]), 2),
             "count": int(row["count"])
         }
         for _, row in trends.iterrows()
