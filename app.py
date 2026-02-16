@@ -2,17 +2,14 @@ import pandas as pd
 import os
 from fastapi import FastAPI, HTTPException
 
-# Get directory where app.py lives
+#Get directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "final_data.csv")
 
 # Load CSV
 df = pd.read_csv(DATA_PATH)
 
-
-# -------------------------
-# Fix price column
-# -------------------------
+#Fix price column
 df["price"] = (
     df["price"]
     .astype(str)
@@ -22,9 +19,7 @@ df["price"] = (
 
 df["price"] = pd.to_numeric(df["price"], errors="coerce")
 
-# -------------------------
-# Fix date columns (day-first format)
-# -------------------------
+#Fix date columns (day-first format)
 df["added_date"] = pd.to_datetime(
     df["added_date"],
     errors="coerce",
@@ -37,9 +32,7 @@ df["updated_date"] = pd.to_datetime(
     dayfirst=True
 )
 
-# -------------------------
-# Create month_added as datetime (monthly)
-# -------------------------
+# Create month_added as datetime(monthly)
 df["month_added"] = (
     df["added_date"]
     .dt.to_period("M")
@@ -47,9 +40,8 @@ df["month_added"] = (
 )
 
 print(df.dtypes)
-# -------------------------
-# FastAPI app
-# -------------------------
+
+#FastAPI app
 app = FastAPI(title="Real Estate API")
 
 MIN_SAMPLE_SIZE = 10
@@ -58,9 +50,7 @@ VALID_PROPERTY_CATEGORIES = sorted(
     df["property_type"].dropna().unique().tolist()
 )
 
-# -------------------------
 # Root
-# -------------------------
 @app.get("/")
 def home():
     return {
@@ -68,9 +58,7 @@ def home():
         "rows_loaded": int(len(df))
     }
 
-# -------------------------
 # Average Price
-# -------------------------
 @app.get("/api/average_price")
 def average_price(
     state: str | None = None,
@@ -103,9 +91,7 @@ def average_price(
         "count": int(len(data))
     }
 
-# -------------------------
-# Trends
-# -------------------------
+#Trends
 @app.get("/api/trends")
 def price_trends(
     state: str | None = None,
