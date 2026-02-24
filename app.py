@@ -3,58 +3,73 @@ import os
 import re
 from fastapi import FastAPI, HTTPException
 
-#Load Data
+# =========================
+# LOAD DATA (GIT SAFE)
+# =========================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(BASE_DIR, "final_data.csv")
 
-df = pd.read_csv(r"final_data.csv")
+df = pd.read_csv(DATA_PATH)
 
-
-#clean price
+# =========================
+# PRICE CLEANING
+# =========================
 def clean_price(value):
     if pd.isna(value):
         return None
 
     value = str(value).lower()
 
-    #convert shorthand e.g 3.5m
+    # convert shorthand e.g 3.5m
     if "m" in value:
         num = re.findall(r"\d+\.?\d*", value)
         if num:
             return float(num[0]) * 1_000_000
 
-    #remove everything except digits
+    # remove everything except digits
     num = re.findall(r"\d+", value.replace(",", ""))
     if num:
         return float("".join(num))
 
     return None
 
-
 df["price"] = df["price"].apply(clean_price)
 
-#remove invalid values
+# remove invalid values
 df = df[df["price"].notna()]
 df = df[df["price"] > 0]
 
-#date cleaning
+# =========================
+# DATE CLEANING
+# =========================
 df["added_date"] = pd.to_datetime(df["added_date"], errors="coerce", dayfirst=True)
 df["updated_date"] = pd.to_datetime(df["updated_date"], errors="coerce", dayfirst=True)
 
 df["month_added"] = df["added_date"].dt.to_period("M").dt.to_timestamp()
 
-#REMOVE EXTREME OUTLIERS
-#Nigeria market realistic band
+# =========================
+# REMOVE EXTREME OUTLIERS
+# =========================
 df = df[(df["price"] >= 5_000_000) & (df["price"] <= 1_000_000_000)]
 
-#FastAPI App
+# =========================
+# FASTAPI INIT
+# =========================
 app = FastAPI(title="Real Estate API")
 
 MIN_SAMPLE_SIZE = 10
 
-VALID_PROPERTY_CATEGORIES = sorted(
-    df["property_type"].dropna().unique().tolist()
+VALID_PROPERTY_CATEGORIES = (
+    df["property_type"]
+    .dropna()
+    .str.lower()
+    .unique()
+    .tolist()
 )
 
-#ROOT
+# =========================
+# ROOT
+# =========================
 @app.get("/")
 def home():
     return {
@@ -62,24 +77,32 @@ def home():
         "rows_loaded": int(len(df))
     }
 
+# =========================
 # SAFE FILTER FUNCTION
+# =========================
 def filter_data(data, state=None, property_type=None):
+
     if state:
-        data = data[data["state"].str.lower() == state.lower()]
+        data = data[data["state"].fillna("").str.lower() == state.lower()]
 
     if property_type:
-        if property_type.lower() not in [c.lower() for c in VALID_PROPERTY_CATEGORIES]:
+        if property_type.lower() not in VALID_PROPERTY_CATEGORIES:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid property_type. Allowed values: {VALID_PROPERTY_CATEGORIES}"
             )
 
-        data = data[data["property_type"].str.lower() == property_type.lower()]
+        data = data[data["property_type"].fillna("").str.lower() == property_type.lower()]
 
     return data
 
-#remove remaining outliers(IQR)
+# =========================
+# OUTLIER REMOVAL
+# =========================
 def remove_outliers(data):
+    if len(data) < MIN_SAMPLE_SIZE:
+        return data
+
     Q1 = data["price"].quantile(0.25)
     Q3 = data["price"].quantile(0.75)
     IQR = Q3 - Q1
@@ -89,7 +112,9 @@ def remove_outliers(data):
 
     return data[(data["price"] >= lower) & (data["price"] <= upper)]
 
-#average price(median)
+# =========================
+# AVERAGE PRICE
+# =========================
 @app.get("/api/average_price")
 def average_price(state: str | None = None, property_type: str | None = None):
 
@@ -109,7 +134,9 @@ def average_price(state: str | None = None, property_type: str | None = None):
         "count": int(len(data))
     }
 
-#price trends
+# =========================
+# PRICE TRENDS
+# =========================
 @app.get("/api/trends")
 def price_trends(state: str | None = None, property_type: str | None = None):
 
@@ -154,3 +181,4 @@ def price_trends(state: str | None = None, property_type: str | None = None):
         }
         for _, row in trends.iterrows()
     ]
+
