@@ -3,58 +3,49 @@ import os
 import re
 from fastapi import FastAPI, HTTPException
 
-# =========================
-# LOAD DATA (GIT SAFE)
-# =========================
+#load data
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "final_data.csv")
 
 df = pd.read_csv(DATA_PATH)
 
-# =========================
-# PRICE CLEANING
-# =========================
+#clean price
 def clean_price(value):
     if pd.isna(value):
         return None
 
-    value = str(value).lower()
+    value = str(value).lower().replace(",", "")
 
-    # convert shorthand e.g 3.5m
-    if "m" in value:
-        num = re.findall(r"\d+\.?\d*", value)
-        if num:
-            return float(num[0]) * 1_000_000
+    num = re.findall(r"\d+\.?\d*", value)
+    if not num:
+        return None
 
-    # remove everything except digits
-    num = re.findall(r"\d+", value.replace(",", ""))
-    if num:
-        return float("".join(num))
+    num = float(num[0])
 
-    return None
+    if "b" in value:
+        return num * 1_000_000_000
+    elif "m" in value:
+        return num * 1_000_000
+    elif "k" in value:
+        return num * 1_000
+    else:
+        return num
 
 df["price"] = df["price"].apply(clean_price)
 
 # remove invalid values
-df = df[df["price"].notna()]
 df = df[df["price"] > 0]
 
-# =========================
-# DATE CLEANING
-# =========================
+#date cleaning
 df["added_date"] = pd.to_datetime(df["added_date"], errors="coerce", dayfirst=True)
 df["updated_date"] = pd.to_datetime(df["updated_date"], errors="coerce", dayfirst=True)
 
 df["month_added"] = df["added_date"].dt.to_period("M").dt.to_timestamp()
 
-# =========================
-# REMOVE EXTREME OUTLIERS
-# =========================
-df = df[(df["price"] >= 5_000_000) & (df["price"] <= 1_000_000_000)]
+#remove extreme outliers
+df = df[(df["price"] >= 500_000) & (df["price"] <= 1_500_000_000)]
 
-# =========================
-# FASTAPI INIT
-# =========================
+#fastapi init
 app = FastAPI(title="Real Estate API")
 
 MIN_SAMPLE_SIZE = 10
@@ -67,9 +58,7 @@ VALID_PROPERTY_CATEGORIES = (
     .tolist()
 )
 
-# =========================
-# ROOT
-# =========================
+#root
 @app.get("/")
 def home():
     return {
@@ -77,9 +66,7 @@ def home():
         "rows_loaded": int(len(df))
     }
 
-# =========================
-# SAFE FILTER FUNCTION
-# =========================
+#filter function
 def filter_data(data, state=None, property_type=None):
 
     if state:
@@ -96,9 +83,7 @@ def filter_data(data, state=None, property_type=None):
 
     return data
 
-# =========================
-# OUTLIER REMOVAL
-# =========================
+#remove outliers
 def remove_outliers(data):
     if len(data) < MIN_SAMPLE_SIZE:
         return data
@@ -112,9 +97,7 @@ def remove_outliers(data):
 
     return data[(data["price"] >= lower) & (data["price"] <= upper)]
 
-# =========================
-# AVERAGE PRICE
-# =========================
+#average price
 @app.get("/api/average_price")
 def average_price(state: str | None = None, property_type: str | None = None):
 
@@ -134,9 +117,7 @@ def average_price(state: str | None = None, property_type: str | None = None):
         "count": int(len(data))
     }
 
-# =========================
-# PRICE TRENDS
-# =========================
+#price trends
 @app.get("/api/trends")
 def price_trends(state: str | None = None, property_type: str | None = None):
 
