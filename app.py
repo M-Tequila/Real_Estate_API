@@ -3,62 +3,138 @@ import os
 import re
 from fastapi import FastAPI, HTTPException
 
-#load data
+# -----------------------------
+# LOAD DATA
+# -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_PATH = os.path.join(BASE_DIR, "final_data.csv")
 
-df = pd.read_csv(DATA_PATH)
+df = pd.read_csv(DATA_PATH, encoding="latin1")
 
-#clean price
+# -----------------------------
+# CLEAN PRICE
+# -----------------------------
 def clean_price(value):
     if pd.isna(value):
         return None
 
-    value = str(value).lower().replace(",", "")
+    value = str(value).lower().strip()
 
-    num = re.findall(r"\d+\.?\d*", value)
-    if not num:
+    # remove rentals / shortlets
+    if any(x in value for x in ["rent", "shortlet", "per", "month", "day"]):
         return None
 
-    num = float(num[0])
+    # handle millions (e.g 3.5m)
+    if "m" in value:
+        num = re.findall(r"\d+\.?\d*", value)
+        if num:
+            return float(num[0]) * 1_000_000
 
-    if "b" in value:
-        return num * 1_000_000_000
-    elif "m" in value:
-        return num * 1_000_000
-    elif "k" in value:
-        return num * 1_000
-    else:
-        return num
+    # extract numeric values
+    num = re.findall(r"\d+", value.replace(",", ""))
+    if num:
+        return float("".join(num))
+
+    return None
+
 
 df["price"] = df["price"].apply(clean_price)
 
-# remove invalid values
-df = df[df["price"] > 0]
+# -----------------------------
+# REMOVE INVALID PRICES
+# -----------------------------
+df = df[df["price"].notna()]
+df = df[df["price"] > 100_000]
 
-#date cleaning
+# -----------------------------
+# CLEAN PROPERTY TYPE (NEW COLUMN ONLY)
+# -----------------------------
+def normalize_property_type(x):
+    if pd.isna(x):
+        return "unknown"
+
+    x = str(x).lower()
+
+    if "flat" in x or "apartment" in x:
+        return "flat/apartment"
+    elif "duplex" in x:
+        return "duplex"
+    elif "terrace" in x:
+        return "terraced duplex"
+    elif "semi" in x:
+        return "semi detached duplex"
+    elif "detached" in x:
+        return "fully detached"
+    elif "bungalow" in x:
+        return "bungalow"
+    elif "land" in x or "plot" in x:
+        return "land"
+    elif "house" in x:
+        return "house"
+
+    return "other"
+
+
+# ✅ DO NOT overwrite original column
+df["property_type_clean"] = df["property_type"].apply(normalize_property_type)
+
+# -----------------------------
+# STATE HANDLING (SAFE)
+# -----------------------------
+states = [
+    "lagos","abuja","oyo","rivers","ogun","delta","edo","kaduna","kano",
+    "plateau","enugu","imo","anambra","kwara","osun","ondo","ekiti",
+    "kogi","niger","bauchi","gombe","taraba","adamawa","borno","yobe",
+    "katsina","zamfara","sokoto","kebbi","cross river","akwa ibom",
+    "bayelsa","ebonyi","nasarawa","benue","jigawa"
+]
+
+def extract_state(location):
+    if pd.isna(location):
+        return "Unknown"
+
+    location = location.lower()
+
+    for state in states:
+        if state in location:
+            return state.title()
+
+    return "Unknown"
+
+
+if "state" not in df.columns or df["state"].isna().sum() > 0:
+    df["state"] = df["location"].apply(extract_state)
+
+# -----------------------------
+# DATE CLEANING
+# -----------------------------
 df["added_date"] = pd.to_datetime(df["added_date"], errors="coerce", dayfirst=True)
-df["updated_date"] = pd.to_datetime(df["updated_date"], errors="coerce", dayfirst=True)
-
 df["month_added"] = df["added_date"].dt.to_period("M").dt.to_timestamp()
 
-#remove extreme outliers
+# -----------------------------
+# GLOBAL OUTLIER FILTER
+# -----------------------------
 df = df[(df["price"] >= 500_000) & (df["price"] <= 1_500_000_000)]
 
-#fastapi init
+# -----------------------------
+# REMOVE DUPLICATES
+# -----------------------------
+df = df.drop_duplicates()
+
+# -----------------------------
+# FASTAPI APP
+# -----------------------------
 app = FastAPI(title="Real Estate API")
 
-MIN_SAMPLE_SIZE = 10
+MIN_SAMPLE_SIZE = 5
 
-VALID_PROPERTY_CATEGORIES = (
-    df["property_type"]
-    .dropna()
-    .str.lower()
-    .unique()
-    .tolist()
+VALID_PROPERTY_CATEGORIES = sorted(
+    df["property_type_clean"].dropna().unique().tolist()
 )
 
-#root
+# -----------------------------
+# ROOT
+# -----------------------------
 @app.get("/")
 def home():
     return {
@@ -66,43 +142,33 @@ def home():
         "rows_loaded": int(len(df))
     }
 
-#filter function
+# -----------------------------
+# FILTER FUNCTION (USES CLEAN COLUMN)
+# -----------------------------
 def filter_data(data, state=None, property_type=None):
-
     if state:
-        data = data[data["state"].fillna("").str.lower() == state.lower()]
+        data = data[data["state"].str.lower() == state.lower()]
 
     if property_type:
-        if property_type.lower() not in VALID_PROPERTY_CATEGORIES:
+        if property_type.lower() not in [c.lower() for c in VALID_PROPERTY_CATEGORIES]:
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid property_type. Allowed values: {VALID_PROPERTY_CATEGORIES}"
             )
 
-        data = data[data["property_type"].fillna("").str.lower() == property_type.lower()]
+        data = data[
+            data["property_type_clean"].str.lower() == property_type.lower()
+        ]
 
     return data
 
-#remove outliers
-def remove_outliers(data):
-    if len(data) < MIN_SAMPLE_SIZE:
-        return data
-
-    Q1 = data["price"].quantile(0.25)
-    Q3 = data["price"].quantile(0.75)
-    IQR = Q3 - Q1
-
-    lower = Q1 - 1.5 * IQR
-    upper = Q3 + 1.5 * IQR
-
-    return data[(data["price"] >= lower) & (data["price"] <= upper)]
-
-#average price
+# -----------------------------
+# MEDIAN PRICE
+# -----------------------------
 @app.get("/api/average_price")
 def average_price(state: str | None = None, property_type: str | None = None):
 
-    data = filter_data(df.copy(), state, property_type)
-    data = remove_outliers(data)
+    data = filter_data(df, state, property_type)
 
     if len(data) < MIN_SAMPLE_SIZE:
         raise HTTPException(
@@ -117,7 +183,9 @@ def average_price(state: str | None = None, property_type: str | None = None):
         "count": int(len(data))
     }
 
-#price trends
+# -----------------------------
+# PRICE TRENDS
+# -----------------------------
 @app.get("/api/trends")
 def price_trends(state: str | None = None, property_type: str | None = None):
 
@@ -127,8 +195,7 @@ def price_trends(state: str | None = None, property_type: str | None = None):
             detail="Please provide at least a state or property_type."
         )
 
-    data = filter_data(df.copy(), state, property_type)
-    data = remove_outliers(data)
+    data = filter_data(df, state, property_type)
 
     if data.empty:
         raise HTTPException(
@@ -162,4 +229,3 @@ def price_trends(state: str | None = None, property_type: str | None = None):
         }
         for _, row in trends.iterrows()
     ]
-
