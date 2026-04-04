@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 # LOAD DATA
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_PATH = os.path.join(BASE_DIR, "final_data.csv")
+DATA_PATH = os.path.join(BASE_DIR, "Final_data_CSV.csv")
 
 df = pd.read_csv(DATA_PATH, encoding="latin1")
 
